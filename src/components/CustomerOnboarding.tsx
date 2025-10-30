@@ -111,8 +111,8 @@ const CustomerOnboarding: React.FC<CustomerOnboardingProps> = ({ restaurant, onC
   };
 
   const handleSignup = async () => {
-    if (!formData.firstName.trim() || !formData.lastName.trim() || !formData.email.trim()) {
-      setError('Please fill in all required fields');
+    if (!formData.firstName.trim() || !formData.lastName.trim() || !formData.email.trim() || !formData.phone.trim()) {
+      setError('Please fill in all required fields including phone number');
       return;
     }
 
@@ -121,13 +121,23 @@ const CustomerOnboarding: React.FC<CustomerOnboardingProps> = ({ restaurant, onC
       return;
     }
 
+    // Validate phone number format (must start with + and have country code)
+    const phoneRegex = /^\+[1-9]\d{1,14}$/;
+    if (!phoneRegex.test(formData.phone.replace(/\s/g, ''))) {
+      setError('Please enter a valid phone number with country code (e.g., +971 50 123 4567)');
+      return;
+    }
+
     setLoading(true);
     try {
+      // Format phone number (remove spaces)
+      const formattedPhone = formData.phone.replace(/\s/g, '');
+
       const newCustomer = await CustomerService.createCustomer(restaurant.id, {
         first_name: formData.firstName,
         last_name: formData.lastName,
         email: formData.email,
-        phone: formData.phone || undefined,
+        phone: formattedPhone,
         date_of_birth: formData.birthDate || undefined
       }, consents);
 
@@ -382,7 +392,7 @@ const CustomerOnboarding: React.FC<CustomerOnboardingProps> = ({ restaurant, onC
 
                         <div>
                           <label className="block text-sm font-semibold text-gray-700 mb-2">
-                            Phone Number (Optional)
+                            Phone Number (Required for WhatsApp promotions) *
                           </label>
                           <div className="relative">
                             <Phone className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
@@ -391,9 +401,11 @@ const CustomerOnboarding: React.FC<CustomerOnboardingProps> = ({ restaurant, onC
                               value={formData.phone}
                               onChange={(e) => handleInputChange('phone', e.target.value)}
                               className="w-full pl-12 pr-4 py-3 border border-gray-200 rounded-lg bg-gray-50 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-300"
-                              placeholder="+971 50 123 4567"
+                              placeholder="+60 12 345 6789"
+                              required
                             />
                           </div>
+                          <p className="text-xs text-gray-500 mt-1">Include country code (e.g., +60 for Malaysia)</p>
                         </div>
 
                         <div>

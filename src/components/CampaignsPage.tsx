@@ -48,8 +48,8 @@ const CampaignsPage: React.FC = () => {
     if (!restaurant) return;
 
     const confirmMessage = testMode
-      ? 'Send a test message to yourself?'
-      : 'Are you sure you want to send this campaign? This action cannot be undone.';
+      ? 'Send a test message to your restaurant contact number?'
+      : 'Are you sure you want to send this campaign to all targeted customers? This action cannot be undone.';
 
     if (!confirm(confirmMessage)) return;
 
@@ -58,17 +58,19 @@ const CampaignsPage: React.FC = () => {
       setSendError(null);
       setSendSuccess(null);
 
- if (testMode) {
-  const testPhoneNumber = prompt('Enter your WhatsApp number (e.g. +60123456789):');
-  if (!testPhoneNumber) return alert('Phone number is required.');
-  await CampaignService.sendCampaign(campaignId, true, testPhoneNumber);
-} else {
-  await CampaignService.sendCampaign(campaignId, false);
-}
+      const result = await CampaignService.sendCampaign(campaignId, testMode);
 
+      if (result.results) {
+        const {sent, failed, skipped, total} = result.results;
+        setSendSuccess(
+          testMode
+            ? 'Test message sent successfully to your contact number!'
+            : `Campaign sent! ${sent} delivered, ${skipped} skipped (no consent/phone), ${failed} failed out of ${total} customers.`
+        );
+      } else {
+        setSendSuccess(testMode ? 'Test message sent successfully!' : 'Campaign sent successfully!');
+      }
 
-
-      setSendSuccess(testMode ? 'Test message sent successfully!' : 'Campaign sent successfully!');
       fetchCampaigns();
     } catch (error: any) {
       console.error('Error sending campaign:', error);

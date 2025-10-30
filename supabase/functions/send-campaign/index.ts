@@ -9,8 +9,6 @@ const corsHeaders = {
 interface CampaignRequest {
   campaignId: string;
   testMode?: boolean;
-  testPhoneNumber?: string;
-  testEmail?: string;
 }
 
 interface ProviderConfig {
@@ -37,12 +35,12 @@ Deno.serve(async (req: Request) => {
 
     const token = authHeader.replace('Bearer ', '');
     const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-    
+
     if (authError || !user) {
       throw new Error('Unauthorized');
     }
 
-    const { campaignId, testMode = false, testPhoneNumber, testEmail }: CampaignRequest = await req.json();
+    const { campaignId, testMode = false }: CampaignRequest = await req.json();
 
     const { data: campaign, error: campaignError } = await supabase
       .from('campaigns')
@@ -51,7 +49,8 @@ Deno.serve(async (req: Request) => {
         restaurant:restaurants!inner(
           id,
           name,
-          owner_id
+          owner_id,
+          contact_phone
         )
       `)
       .eq('id', campaignId)
@@ -65,34 +64,42 @@ Deno.serve(async (req: Request) => {
       throw new Error('Unauthorized to send this campaign');
     }
 
-    const { data: messages } = await supabase
-      .from('campaign_messages')
-      .select('*')
-      .eq('campaign_id', campaignId);
+    const messageTemplate = campaign.message_template;
+    const messageSubject = campaign.message_subject;
+    const messageVariables = campaign.message_variables || {};
 
-    if (!messages || messages.length === 0) {
-      throw new Error('No messages found for campaign');
+    if (!messageTemplate) {
+      throw new Error('No message template found for campaign');
     }
 
     let targetCustomers = [];
-    
+
     if (testMode) {
-      const { data: testCustomer } = await supabase
-        .from('customers')
-        .select('*')
-        .eq('restaurant_id', campaign.restaurant_id)
-        .limit(1)
-        .single();
-      
-      if (testCustomer) {
-        targetCustomers = [{
-          ...testCustomer,
-          phone: testPhoneNumber || testCustomer.phone,
-          email: testEmail || testCustomer.email,
-        }];
+      // For test mode, send to restaurant manager's phone
+      if (!campaign.restaurant.contact_phone) {
+        throw new Error('Please add a contact phone number in your restaurant settings to test campaigns');
       }
+
+      // Create a mock customer with manager's details for testing
+      targetCustomers = [{
+        id: 'test-customer',
+        restaurant_id: campaign.restaurant_id,
+        first_name: campaign.restaurant.name,
+        last_name: 'Manager',
+        phone: campaign.restaurant.contact_phone,
+        email: 'test@restaurant.com',
+        total_points: 100,
+        consent_whatsapp: true,
+        consent_email: true,
+        consent_sms: true,
+        consent_push: true,
+      }];
     } else {
       targetCustomers = await calculateAudience(supabase, campaign);
+    }
+
+    if (!testMode && targetCustomers.length === 0) {
+      throw new Error('No customers match your audience criteria');
     }
 
     const { data: providerConfig } = await supabase
@@ -101,10 +108,10 @@ Deno.serve(async (req: Request) => {
       .eq('restaurant_id', campaign.restaurant_id)
       .eq('channel', campaign.primary_channel)
       .eq('is_enabled', true)
-      .single();
+      .maybeSingle();
 
     if (!providerConfig) {
-      throw new Error(`No provider configured for ${campaign.primary_channel}`);
+      throw new Error(`No provider configured for ${campaign.primary_channel}. Please configure it in Campaign Settings.`);
     }
 
     const results = {
@@ -116,25 +123,31 @@ Deno.serve(async (req: Request) => {
 
     for (const customer of targetCustomers) {
       try {
-        const { data: consent } = await supabase
-          .from('customer_consent')
-          .select('*')
-          .eq('customer_id', customer.id)
-          .eq('restaurant_id', campaign.restaurant_id)
-          .single();
+        // Check consent from customers table directly
+        const consentField = `consent_${campaign.primary_channel}`;
+        const hasConsent = customer[consentField] === true;
 
-        const hasConsent = consent && consent[campaign.primary_channel] === true;
-        
         if (!hasConsent && !testMode) {
           results.skipped++;
           continue;
         }
 
-        const message = messages[0];
+        // Check if customer has phone number for WhatsApp/SMS
+        if ((campaign.primary_channel === 'whatsapp' || campaign.primary_channel === 'sms') && !customer.phone) {
+          results.skipped++;
+          continue;
+        }
+
+        // Check if customer has email for email campaigns
+        if (campaign.primary_channel === 'email' && !customer.email) {
+          results.skipped++;
+          continue;
+        }
+
         const personalizedMessage = personalizeMessage(
-          message.message_template,
+          messageTemplate,
           customer,
-          message.variables
+          messageVariables
         );
 
         const sendResult = await sendMessage(
@@ -142,12 +155,12 @@ Deno.serve(async (req: Request) => {
           providerConfig,
           customer,
           personalizedMessage,
-          message.subject
+          messageSubject
         );
 
         if (sendResult.success) {
           results.sent++;
-          
+
           await supabase.from('campaign_sends').insert({
             campaign_id: campaignId,
             customer_id: customer.id,
@@ -157,7 +170,7 @@ Deno.serve(async (req: Request) => {
           });
         } else {
           results.failed++;
-          
+
           await supabase.from('campaign_sends').insert({
             campaign_id: campaignId,
             customer_id: customer.id,
@@ -223,7 +236,7 @@ async function calculateAudience(supabase: any, campaign: any) {
     .eq('restaurant_id', campaign.restaurant_id);
 
   if (campaign.audience_type === 'tagged' && campaign.audience_filter.tags) {
-    query = query.in('id', 
+    query = query.in('id',
       supabase
         .from('customer_tag_assignments')
         .select('customer_id')
@@ -232,13 +245,13 @@ async function calculateAudience(supabase: any, campaign: any) {
   } else if (campaign.audience_type === 'last_order_date') {
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - (campaign.audience_filter.days_since_last_order || 30));
-    query = query.lt('last_order_date', cutoffDate.toISOString());
+    query = query.lt('last_visit', cutoffDate.toISOString());
   } else if (campaign.audience_type === 'wallet_status') {
-    if (campaign.audience_filter.min_points) {
-      query = query.gte('points_balance', campaign.audience_filter.min_points);
-    }
-    if (campaign.audience_filter.max_points) {
-      query = query.lte('points_balance', campaign.audience_filter.max_points);
+    const minPoints = campaign.audience_filter.min_points !== undefined ? campaign.audience_filter.min_points : 0;
+    query = query.gte('total_points', minPoints);
+
+    if (campaign.audience_filter.max_points !== undefined && campaign.audience_filter.max_points !== null) {
+      query = query.lte('total_points', campaign.audience_filter.max_points);
     }
   }
 
@@ -248,13 +261,17 @@ async function calculateAudience(supabase: any, campaign: any) {
 
 function personalizeMessage(template: string, customer: any, variables: any) {
   let message = template;
-  message = message.replace(/\{\{name\}\}/g, customer.name || 'Customer');
-  message = message.replace(/\{\{points\}\}/g, customer.points_balance?.toString() || '0');
-  
-  Object.keys(variables).forEach(key => {
-    message = message.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'g'), variables[key]);
-  });
-  
+  const customerName = customer.first_name ? `${customer.first_name} ${customer.last_name || ''}`.trim() : 'Customer';
+  message = message.replace(/\{\{name\}\}/g, customerName);
+  message = message.replace(/\{\{points\}\}/g, customer.total_points?.toString() || '0');
+
+  if (variables && typeof variables === 'object') {
+    Object.keys(variables).forEach(key => {
+      const value = variables[key] || '';
+      message = message.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'g'), value);
+    });
+  }
+
   return message;
 }
 
@@ -275,7 +292,7 @@ async function sendMessage(
     } else if (channel === 'push') {
       return { success: true };
     }
-    
+
     return { success: false, error: 'Unsupported channel' };
   } catch (error: any) {
     return { success: false, error: error.message };
@@ -288,6 +305,9 @@ async function sendWhatsApp(config: ProviderConfig, to: string, message: string)
     const authToken = config.api_key_encrypted;
     const from = config.config_json.phoneNumber;
 
+    // Ensure phone number is in E.164 format
+    const formattedTo = to.startsWith('+') ? to : `+${to}`;
+
     const response = await fetch(
       `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,
       {
@@ -298,7 +318,7 @@ async function sendWhatsApp(config: ProviderConfig, to: string, message: string)
         },
         body: new URLSearchParams({
           From: `whatsapp:${from}`,
-          To: `whatsapp:${to}`,
+          To: `whatsapp:${formattedTo}`,
           Body: message,
         }),
       }
@@ -311,7 +331,7 @@ async function sendWhatsApp(config: ProviderConfig, to: string, message: string)
       return { success: false, error };
     }
   }
-  
+
   return { success: false, error: 'Provider not supported' };
 }
 
@@ -320,6 +340,9 @@ async function sendSMS(config: ProviderConfig, to: string, message: string) {
     const accountSid = config.config_json.accountSid;
     const authToken = config.api_key_encrypted;
     const from = config.config_json.phoneNumber;
+
+    // Ensure phone number is in E.164 format
+    const formattedTo = to.startsWith('+') ? to : `+${to}`;
 
     const response = await fetch(
       `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,
@@ -331,7 +354,7 @@ async function sendSMS(config: ProviderConfig, to: string, message: string) {
         },
         body: new URLSearchParams({
           From: from,
-          To: to,
+          To: formattedTo,
           Body: message,
         }),
       }
@@ -344,7 +367,7 @@ async function sendSMS(config: ProviderConfig, to: string, message: string) {
       return { success: false, error };
     }
   }
-  
+
   return { success: false, error: 'Provider not supported' };
 }
 
@@ -375,6 +398,6 @@ async function sendEmail(config: ProviderConfig, to: string, subject: string, me
       return { success: false, error };
     }
   }
-  
+
   return { success: false, error: 'Provider not supported' };
 }
