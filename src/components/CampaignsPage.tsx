@@ -81,17 +81,25 @@ const CampaignsPage: React.FC = () => {
   };
 
   const handleDeleteCampaign = async (campaignId: string) => {
-    if (!confirm('Are you sure you want to delete this campaign? This action cannot be undone.')) {
+    const confirmMessage = 'Are you sure you want to delete this campaign? All delivery records will also be deleted. This action cannot be undone.';
+
+    if (!confirm(confirmMessage)) {
       return;
     }
 
     try {
+      setSendingCampaignId(campaignId);
+      setSendError(null);
+      setSendSuccess(null);
+
       await CampaignService.deleteCampaign(campaignId);
       setSendSuccess('Campaign deleted successfully');
       fetchCampaigns();
     } catch (error: any) {
       console.error('Error deleting campaign:', error);
       setSendError(error.message || 'Failed to delete campaign');
+    } finally {
+      setSendingCampaignId(null);
     }
   };
 
@@ -390,38 +398,50 @@ const CampaignsPage: React.FC = () => {
                         </>
                       )}
                       {campaign.status === 'draft' && (
-                        <>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              navigate(`/dashboard/campaigns/${campaign.id}/edit`);
-                            }}
-                            className="p-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-                            title="Edit campaign"
-                          >
-                            <Edit3 className="h-4 w-4" />
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDeleteCampaign(campaign.id);
-                            }}
-                            className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                            title="Delete campaign"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            navigate(`/dashboard/campaigns/${campaign.id}/edit`);
+                          }}
+                          className="p-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                          title="Edit campaign"
+                        >
+                          <Edit3 className="h-4 w-4" />
+                        </button>
+                      )}
+                      {campaign.status !== 'sent' && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            navigate(`/dashboard/campaigns/${campaign.id}/metrics`);
+                          }}
+                          className="p-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                          title="View metrics"
+                        >
+                          <BarChart3 className="h-4 w-4" />
+                        </button>
+                      )}
+                      {campaign.status === 'sent' && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            navigate(`/dashboard/campaigns/${campaign.id}/metrics`);
+                          }}
+                          className="p-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                          title="View delivery metrics"
+                        >
+                          <BarChart3 className="h-4 w-4" />
+                        </button>
                       )}
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          navigate(`/dashboard/campaigns/${campaign.id}/metrics`);
+                          handleDeleteCampaign(campaign.id);
                         }}
-                        className="p-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-                        title="View metrics"
+                        className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                        title="Delete campaign"
                       >
-                        <BarChart3 className="h-4 w-4" />
+                        <Trash2 className="h-4 w-4" />
                       </button>
                     </div>
                   </div>

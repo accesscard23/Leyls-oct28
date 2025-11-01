@@ -26,6 +26,7 @@ const CampaignSettings: React.FC = () => {
   const [testing, setTesting] = useState<string | null>(null);
   const [message, setMessage] = useState({ type: '', text: '' });
   const [showApiKeys, setShowApiKeys] = useState<Record<string, boolean>>({});
+  const [contactPhone, setContactPhone] = useState('');
 
   const [providers, setProviders] = useState<ChannelProviders>({
     whatsapp: {
@@ -60,8 +61,26 @@ const CampaignSettings: React.FC = () => {
   useEffect(() => {
     if (restaurant) {
       loadSettings();
+      loadContactPhone();
     }
   }, [restaurant]);
+
+  const loadContactPhone = async () => {
+    if (!restaurant) return;
+    try {
+      const { data } = await supabase
+        .from('restaurants')
+        .select('contact_phone')
+        .eq('id', restaurant.id)
+        .single();
+
+      if (data?.contact_phone) {
+        setContactPhone(data.contact_phone);
+      }
+    } catch (error) {
+      console.error('Error loading contact phone:', error);
+    }
+  };
 
   const loadSettings = async () => {
     if (!restaurant) return;
@@ -109,30 +128,59 @@ const CampaignSettings: React.FC = () => {
       setMessage({ type: '', text: '' });
 
       for (const [channel, config] of Object.entries(providers)) {
-        if (config.apiKey && config.apiKey !== '••••••••') {
-          await supabase.from('channel_provider_configs').upsert({
-            restaurant_id: restaurant.id,
-            channel: channel,
-            provider: config.provider,
-            api_key_encrypted: config.apiKey,
-            config_json: config.config,
-            is_enabled: config.enabled,
-          });
-        } else if (config.apiKey === '••••••••') {
-          await supabase
+        // Skip if no API key provided (no changes)
+        if (!config.apiKey || config.apiKey.trim() === '') {
+          continue;
+        }
+
+        // Only save if API key is new (not masked)
+        if (config.apiKey !== '••••••••') {
+          // Use upsert with proper onConflict handling
+          const { error: upsertError } = await supabase
+            .from('channel_provider_configs')
+            .upsert(
+              {
+                restaurant_id: restaurant.id,
+                channel: channel,
+                provider: config.provider,
+                api_key_encrypted: config.apiKey,
+                config_json: config.config,
+                is_enabled: config.enabled,
+              },
+              {
+                onConflict: 'restaurant_id,channel',
+              }
+            );
+
+          if (upsertError) throw upsertError;
+        } else {
+          // Only update config and status if API key is already saved
+          const { error: updateError } = await supabase
             .from('channel_provider_configs')
             .update({
-              provider: config.provider,
               config_json: config.config,
               is_enabled: config.enabled,
             })
             .eq('restaurant_id', restaurant.id)
             .eq('channel', channel);
+
+          if (updateError) throw updateError;
         }
+      }
+
+      // Save contact phone
+      if (contactPhone && restaurant) {
+        const { error: phoneError } = await supabase
+          .from('restaurants')
+          .update({ contact_phone: contactPhone })
+          .eq('id', restaurant.id);
+
+        if (phoneError) throw phoneError;
       }
 
       setMessage({ type: 'success', text: 'Settings saved successfully' });
       await loadSettings();
+      await loadContactPhone();
     } catch (error: any) {
       console.error('Error saving settings:', error);
       setMessage({ type: 'error', text: error.message || 'Failed to save settings' });
@@ -453,6 +501,24 @@ const CampaignSettings: React.FC = () => {
           <span>{message.text}</span>
         </div>
       )}
+
+      <div className="bg-white border border-gray-200 rounded-2xl p-6">
+        <div className="flex items-center gap-3 mb-4">
+          <Smartphone className="h-6 w-6 text-blue-600" />
+          <h3 className="font-semibold text-gray-900">Test Configuration</h3>
+        </div>
+        <p className="text-sm text-gray-600 mb-4">
+          Enter your contact phone number to receive test campaign messages. This allows you to preview how campaigns will look to your customers.
+        </p>
+        <input
+          type="tel"
+          value={contactPhone}
+          onChange={(e) => setContactPhone(e.target.value)}
+          className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-[#E6A85C] focus:border-transparent"
+          placeholder="+60 12 345 6789"
+        />
+        <p className="text-xs text-gray-500 mt-2">Include country code (e.g., +60 for Malaysia, +1 for USA)</p>
+      </div>
 
       <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4">
         <div className="flex items-start gap-3">

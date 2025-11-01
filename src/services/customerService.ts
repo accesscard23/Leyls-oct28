@@ -102,15 +102,29 @@ export class CustomerService {
       throw new Error(error.message);
     }
 
+    // Save consent directly to customers table for campaign system
     if (consents) {
-      await this.updateCustomerConsent(data.id, restaurantId, {
-        whatsapp: consents.whatsapp ?? false,
-        email: consents.email ?? true,
-        sms: consents.sms ?? false,
-        push_notifications: consents.push ?? true,
-      });
+      await supabase
+        .from('customers')
+        .update({
+          consent_whatsapp: consents.whatsapp ?? false,
+          consent_email: consents.email ?? true,
+          consent_sms: consents.sms ?? false,
+          consent_push: consents.push ?? true,
+          consent_date: new Date().toISOString(),
+        })
+        .eq('id', data.id);
     } else {
-      await this.initializeCustomerConsent(data.id, restaurantId);
+      await supabase
+        .from('customers')
+        .update({
+          consent_whatsapp: false,
+          consent_email: true,
+          consent_sms: false,
+          consent_push: true,
+          consent_date: new Date().toISOString(),
+        })
+        .eq('id', data.id);
     }
 
     return data;
